@@ -1,0 +1,62 @@
+---
+title: "Data Science Final Project"
+author: "Ryan Adams"
+format: html
+editor: visual
+---
+
+Loading Libraries and Dataset
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+
+fish_counts <- read.csv("NH_Fish_Ladder_Counts.csv")
+```
+
+Data Exploration/Cleaning
+
+```{r}
+summary(fish_counts)
+is.Date(fish_counts$Date)  #Date column not in date format 
+
+fish_counts$Date <- mdy(fish_counts$Date)
+is.Date(fish_counts$Date) #Now date is actually a date!
+
+fish_counts %>%
+summarise(days_with_fish = sum(DailyTotal > 0, na.rm = TRUE), days_without_fish = sum(DailyTotal == 0, na.rm = TRUE)) %>%#1136 days with fish, 556 days without fish
+kable()
+
+sum(is.na(fish_counts$DailyTotal)) #11 rows with NAs for DailyTotal
+sum(is.na(fish_counts$TEMP)) #125 rows with NAs for temp
+sum(is.na(fish_counts$Year)) #No rows with missing year
+sum(is.na(fish_counts$Location)) #No rows with missing location
+```
+
+Basic Plots
+
+```{r}
+fish_counts %>%
+  group_by(Year) %>%
+  summarise(River_Herring = sum(DailyTotal, na.rm = TRUE)) %>%
+  ggplot(aes(x = Year, y = River_Herring)) +
+  geom_bar(stat = "identity") +
+  theme_classic()
+
+fish_counts %>%
+  group_by(Year, Location) %>%
+  summarise(River_Herring = sum(DailyTotal, na.rm = TRUE)) %>%
+  ggplot(aes(x = Year, y = River_Herring, fill = Location)) +
+  geom_bar(stat = "identity") +
+  theme_classic()
+
+fish_counts %>%
+  group_by(Location, Year) %>%
+  summarise(Run_Size = sum(DailyTotal, na.rm = TRUE)) %>%
+  ggplot(aes(x = Location, y = Run_Size)) +
+  geom_boxplot() +
+  geom_point()  +
+  theme_classic()
+```
