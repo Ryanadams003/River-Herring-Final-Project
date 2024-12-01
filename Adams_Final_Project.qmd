@@ -1,62 +1,798 @@
 ---
-title: "Data Science Final Project"
+title: "River Herring Migration Dynamics in 3 New Hampshire Rivers"
 author: "Ryan Adams"
-format: html
+format: pdf
 editor: visual
+editor_options: 
+  chunk_output_type: console
 ---
 
-Loading Libraries and Dataset
-
-```{r}
-library(tidyverse)
+```{r, echo=FALSE, include=FALSE}
+###Loading Libraries and Dataset
 library(knitr)
 library(kableExtra)
 library(lubridate)
+library(car)
+library(multcomp)
+library(FSA)
+library(dunn.test)
+library(MASS)
+library(tidyverse)
+library(lmtest)
+library(ggeffects)
+library(lme4)
+library(glmmTMB)
+library(ggeffects)
+library(sjPlot)
+library(AICcmodavg)
+library(xtable)
 
 fish_counts <- read.csv("NH_Fish_Ladder_Counts.csv")
 ```
 
-Data Exploration/Cleaning
+```{r, echo=FALSE, include=FALSE}
+###Data Manipulation
+#Round Counts to Whole Numbers
+fish_counts$DailyTotal <- round(fish_counts$DailyTotal)
 
-```{r}
-summary(fish_counts)
-is.Date(fish_counts$Date)  #Date column not in date format 
+#Create presence/absence column
+fish_counts$Binom <- ifelse(fish_counts$DailyTotal > 0, 1, 0)
 
+#Cumulative sum of fish counts and total run size by river and year
+fish_counts <- fish_counts %>%
+  group_by(Location, Year) %>%
+  mutate(
+    cumulative_count = cumsum(DailyTotal),
+    total_count = sum(DailyTotal)
+  ) %>%
+  ungroup()
+
+#Making date column a date variable
 fish_counts$Date <- mdy(fish_counts$Date)
-is.Date(fish_counts$Date) #Now date is actually a date!
+is.Date(fish_counts$Date)
 
-fish_counts %>%
-summarise(days_with_fish = sum(DailyTotal > 0, na.rm = TRUE), days_without_fish = sum(DailyTotal == 0, na.rm = TRUE)) %>%#1136 days with fish, 556 days without fish
-kable()
-
-sum(is.na(fish_counts$DailyTotal)) #11 rows with NAs for DailyTotal
-sum(is.na(fish_counts$TEMP)) #125 rows with NAs for temp
-sum(is.na(fish_counts$Year)) #No rows with missing year
-sum(is.na(fish_counts$Location)) #No rows with missing location
+#Run Size Cumulative Sum by Date
+fish_counts <- fish_counts %>%
+  mutate(month_day = format(Date, "%m-%d"))
 ```
 
-Basic Plots
+```{r, echo=FALSE, include=FALSE}
+###Calculating Migration Parameters
+#Migration Initiation Date
+# Group by Year and Location, and calculate the cumulative count
+initiation_dates <- fish_counts %>%
+  group_by(Year, Location) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(DailyTotal)) %>%
+  # Calculate the total fish count per year and location
+  mutate(total_count = sum(DailyTotal, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Filter to keep rows where cumulative_count is at least 5% of total_count
+  filter(cumulative_count >= 0.05 * total_count) %>%
+  # Get the first date that meets the 5% threshold
+  group_by(Year, Location) %>%
+  slice_min(order_by = Date, n = 1) %>% # specify order_by parameter in slice_min
+  ungroup() %>%
+  # Select the final columns
+  dplyr::select(Year, Location, initiation_date = Date)
+initiation_dates <- initiation_dates %>%
+  distinct(Year, Location, .keep_all = TRUE) #Remove duplicated Location and Year rows
 
-```{r}
+
+#Migration Peak Dates
+peak_dates <- fish_counts %>%
+  group_by(Year, Location) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(DailyTotal)) %>%
+  # Calculate the total fish count per year and location
+  mutate(total_count = sum(DailyTotal, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Filter to keep rows where cumulative_count is at least 5% of total_count
+  filter(cumulative_count >= 0.50 * total_count) %>%
+  # Get the first date that meets the 5% threshold
+  group_by(Year, Location) %>%
+  slice_min(order_by = Date, n = 1) %>% # specify order_by parameter in slice_min
+  ungroup() %>%
+  # Select the final columns
+  dplyr::select(Year, Location, peak_date = Date)
+peak_dates <- peak_dates %>%
+  distinct(Year, Location, .keep_all = TRUE)
+
+
+#Migration Termination Dates
+termination_dates <- fish_counts %>%
+  group_by(Year, Location) %>%
+  arrange(Date) %>%
+  mutate(cumulative_count = cumsum(DailyTotal)) %>%
+  # Calculate the total fish count per year and location
+  mutate(total_count = sum(DailyTotal, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Filter to keep rows where cumulative_count is at least 5% of total_count
+  filter(cumulative_count >= 0.90 * total_count) %>%
+  # Get the first date that meets the 5% threshold
+  group_by(Year, Location) %>%
+  slice_min(order_by = Date, n = 1) %>% # specify order_by parameter in slice_min
+  ungroup() %>%
+  # Select the final columns
+  dplyr::select(Year, Location, termination_date = Date)
+termination_dates <- termination_dates %>%
+  distinct(Year, Location, .keep_all = TRUE)
+
+#Combining parameters
+migration_params <- initiation_dates %>%
+  left_join(peak_dates, by = c("Year", "Location")) %>%
+  left_join(termination_dates, by = c("Year", "Location"))
+
+
+#Migration Duration
+migration_params$duration_days <- as.numeric(difftime(migration_params$termination_date, migration_params$initiation_date, units = "days"))
+
+#Making Dates Julian Day (Where Jan 1 = 1, Jan 2 = 2, etc.)
+migration_params$initiation_day <- yday(migration_params$initiation_date)
+migration_params$peak_day <- yday(migration_params$peak_date)
+migration_params$termination_day <- yday(migration_params$termination_date)
+
+#Adding Run Size to migration_params
+total_counts <- fish_counts %>%
+  group_by(Location, Year) %>%
+  summarise(total_count = sum(DailyTotal, na.rm = TRUE))
+
+migration_params <- migration_params %>% 
+  left_join(total_counts, by = c("Location", "Year"))
+
+mean(migration_params$initiation_day)
+mean(migration_params$peak_day)
+mean(migration_params$termination_day)
+mean(migration_params$duration_days)
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Summary Stats
+str(fish_counts)
+summary(fish_counts)
+apply(na.omit(fish_counts), 2, var) #2 to indicate columns, not rows
+
+str(migration_params)
+summary(migration_params)
+apply(na.omit(migration_params), 2, var)
+
+sum(total_counts$total_count)
+
+total_counts %>%
+filter(Year == 2016) %>%
+  ungroup() %>%
+  summarise(total = sum(total_count))
+
+total_counts %>%
+filter(Year == 2019) %>%
+  ungroup() %>%
+  summarise(total = sum(total_count))
+
+total_counts %>%
+  arrange(desc(total_count))
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Temperature Differences by River and Year (ANOVA)
+range(fish_counts$TEMP, na.rm = TRUE)
+mean(fish_counts$TEMP, na.rm = TRUE)
+
+fish_counts %>%
+  filter(Binom == 1) %>%
+  summarise(meantemp = mean(TEMP, na.rm = TRUE))
+fish_counts %>%
+  filter(Binom == 1) %>%
+  reframe(temprange = range(TEMP, na.rm = TRUE))
+
+fish_present <- fish_counts %>%
+  filter(Binom == 1)
+
+fish_absent <- fish_counts %>%
+  filter(Binom == 0)
+
+t.test(fish_present$TEMP, fish_absent$TEMP)
+
+shapiro.test(fish_counts$TEMP)
+leveneTest(fish_counts$TEMP ~ fish_counts$Location) #Data homoscedastic
+
+qqPlot(fish_counts$TEMP) #Residuals roughly normal
+
+temp_mod1 <- aov(TEMP ~ Location, data = fish_counts)
+summary(temp_mod1)
+TukeyHSD(temp_mod1)
+
+temp_mod2 <- aov(TEMP ~ Year, data = fish_counts)
+summary(temp_mod2)
+
+temp_mod3 <- aov(TEMP ~ Location + Year, data = fish_counts)
+summary(temp_mod3)
+
+temp_mod4 <- aov(TEMP ~ Location * Year, data = fish_counts)
+summary(temp_mod4)
+
+anova(temp_mod1, temp_mod2, temp_mod3, temp_mod4)
+AIC(temp_mod1, temp_mod2, temp_mod3, temp_mod4)
+TempModels <- list("Location" = temp_mod1, "Year" = temp_mod2, "Location + Year" = temp_mod3, "Location * Year" = temp_mod4)
+
+TempTable <- aictab(cand.set = TempModels)
+TempTable
+kable(TempTable, digits = 3, align = "c", caption = "Temperature Model Selection")
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Run Size GLMMs
+runlmer1 <-  glmmTMB(total_count ~ Location, data = total_counts, family = "nbinom2")
+summary(runlmer1)
+
+runlmer2 <- glmmTMB(total_count ~ Location * Year, data = total_counts, family = "nbinom2")
+summary(runlmer2)
+
+runlmer3 <- glmmTMB(total_count ~ Location + (1 | Year), data = total_counts, family = "nbinom2")
+summary(runlmer3)
+
+runlmer4 <- glmmTMB(total_count ~ Location + (1 + Location || Year), data = total_counts, family = "nbinom2")
+summary(runlmer4)
+
+runlmer5 <- glmmTMB(total_count ~ Year, data = total_counts, family = "nbinom2")
+summary(runlmer5)
+
+AIC(runlmer1, runlmer2, runlmer3, runlmer4, runlmer5)
+RunSizeModels <- list("Location" = runlmer1, "Location * Year" = runlmer2, "Location + (1 | Year)" = runlmer3, "Location + (1 + Location || Year)" = runlmer4, "Year" = runlmer5)
+RunSizeTable <- aictab(cand.set = RunSizeModels)
+kable(RunSizeTable, digits = 3, align = "c", caption = "River Herring Run Size Model Selection")
+
+
+plot(ggpredict(runlmer2, terms = "Location"))
+plot(ggpredict(runlmer2, terms = "Year"))
+plot(ggpredict(runlmer2, terms = c("Year", "Location")))
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Hurdle Models (Predicting daily presence/absence and abundance assuming presence)
+hurdmod1 <- glmmTMB(DailyTotal ~ (1 | Year) + Location * TEMP, data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod1)
+
+hurdmod2 <- glmmTMB(DailyTotal ~ Location * TEMP, data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod2)
+
+hurdmod3 <- glmmTMB(DailyTotal ~ Location, data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod3)
+
+hurdmod4 <- glmmTMB(DailyTotal ~ TEMP, data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod4)
+
+hurdmod5 <- glmmTMB(DailyTotal ~ TEMP + Location, data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod5)
+
+hurdmod6 <- glmmTMB(DailyTotal ~ Location + (1 | Year), data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod6)
+
+hurdmod7 <- glmmTMB(DailyTotal ~ TEMP + (1 | Year), data = fish_counts, ziformula = ~., family = "truncated_nbinom2")
+summary(hurdmod7)
+
+AIC(hurdmod1, hurdmod2, hurdmod3, hurdmod4, hurdmod5, hurdmod6, hurdmod7)
+HurdleModels <- list("(1 | Year) + Location * TEMP" = hurdmod1, "Location * TEMP" = hurdmod2, "Location" = hurdmod4, "TEMP + Location" = hurdmod5, "Location + (1 | Year)" = hurdmod6, "TEMP + (1 | Year)" = hurdmod7)
+HurdleModels <- aictab(cand.set = HurdleModels)
+kable(HurdleModels, digits = 3, align = "c", caption = "River Herring Presence/Absence and Abundance Hurdle Model Selection")
+
+plot(ggpredict(hurdmod1, terms = "TEMP"))
+plot(ggpredict(hurdmod1, terms = "Location"))
+plot(ggpredict(hurdmod1, terms = c("TEMP", "Location")))
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Initiation Differences
+initiation1 <- aov(initiation_day ~ Location * Year, data = migration_params)
+summary(initiation1)
+
+initiation2 <- aov(initiation_day ~ Location, data = migration_params)
+summary(initiation2)
+
+initiation3 <- aov(initiation_day ~ Year, data = migration_params)
+summary(initiation3)
+
+initiation4 <- aov(initiation_day ~ Year + Location, data = migration_params)
+summary(initiation4)
+
+AIC(initiation1, initiation2, initiation3, initiation4)
+
+initmodels <- list("Location * Year" = initiation1, "Location" = initiation2, "Year" = initiation3, "Year + Location" = initiation4)
+initmodels <- aictab(cand.set = initmodels)
+kable(initmodels, digits = 3, align = "c", caption = "River Herring Migration Initiation Model Selection")
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Duration Differences
+duration1 <- aov(duration_days ~ Location * Year, data = migration_params)
+summary(duration1)
+
+duration2 <- aov(duration_days ~ Location, data = migration_params)
+summary(duration2)
+
+duration3 <- aov(duration_days ~ Year, data = migration_params)
+summary(duration3)
+
+duration4 <- aov(duration_days ~ Year + Location, data = migration_params)
+summary(duration4)
+
+AIC(duration1, duration2, duration3, duration4)
+duratmods <- list("Location * Year" = duration1, "Location" = duration2, "Year" = duration3, "Year + Location" = duration4)
+duratmods <- aictab(cand.set = duratmods)
+kable(duratmods, digits = 3, align = "c", caption = "River Herring Migration Duration Model Selection")
+```
+
+```{r, echo=FALSE, include=FALSE}
+###Other Plots
+binom <- glmer(Binom ~ (1 | Year) + Location * TEMP, data = fish_counts, family = binomial)
+plot_model(binom, type = "pred", terms = c("TEMP", "Location"))
+
+
+
 fish_counts %>%
   group_by(Year) %>%
   summarise(River_Herring = sum(DailyTotal, na.rm = TRUE)) %>%
   ggplot(aes(x = Year, y = River_Herring)) +
-  geom_bar(stat = "identity") +
-  theme_classic()
+  geom_bar(stat = "identity", fill = "navy") +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(2013, 2023, by = 1)) +
+  xlab("Year") +
+  ylab("Number of River Herring") +
+  ggtitle("River Herring Run Sizes in the Cocheo, Lamprey, and Oyster River, NH")
+
+
 
 fish_counts %>%
   group_by(Year, Location) %>%
   summarise(River_Herring = sum(DailyTotal, na.rm = TRUE)) %>%
   ggplot(aes(x = Year, y = River_Herring, fill = Location)) +
   geom_bar(stat = "identity") +
-  theme_classic()
+  theme_classic() +
+  scale_x_continuous(breaks = seq(2013, 2023, by = 2)) +
+  facet_wrap(~ Location, scales = "free_y") +
+  scale_fill_manual(values = c("dodgerblue", "cadetblue", "steelblue")) +
+  geom_rect(
+    data = data.frame(
+      Location = "Cocheco",
+      xmin = 2017,
+      xmax = 2022,
+      ymin = -Inf,
+      ymax = Inf),
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = "red", alpha = 0.2) +
+  theme(legend.position = "none") +
+  xlab("Year") +
+  ylab("Number of River Herring") +
+  ggtitle("River Herring Run Sizes in the Cocheo, Lamprey, and Oyster River, NH")
+
+
+
+fish_counts <- fish_counts %>%
+  mutate(month_day = format(Date, "%m-%d"))
+
+fish_cumulative <- fish_counts %>%
+  group_by(Location, Year) %>%
+  arrange(Location, Year, Date) %>%
+  mutate(cumulative_count = cumsum(DailyTotal)) %>%
+  ungroup()
+
+average_cumulative <- fish_cumulative %>%
+  group_by(Location, month_day) %>%
+  summarize(avg_cumulative_count = mean(cumulative_count, na.rm = TRUE), .groups = 'drop')
+
+average_cumulative <- average_cumulative %>%
+  mutate(month_day = factor(month_day, levels = unique(month_day)))
+
+ggplot(average_cumulative, aes(x = month_day, y = avg_cumulative_count, color = Location, group = Location)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Average Increase in Cumulative Totals of Fish by Day of Year",
+    x = "Day of Year (Month-Day)",
+    y = "Average Cumulative Count",
+    color = "River"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(
+    breaks = unique(average_cumulative$month_day)[seq(1, length(unique(average_cumulative$month_day)), by = 15)])
+
 
 fish_counts %>%
-  group_by(Location, Year) %>%
-  summarise(Run_Size = sum(DailyTotal, na.rm = TRUE)) %>%
-  ggplot(aes(x = Location, y = Run_Size)) +
-  geom_boxplot() +
-  geom_point()  +
-  theme_classic()
+  group_by(Location, month_day) %>%
+  summarize(avg_count = mean(DailyTotal, na.rm = TRUE)) %>%
+ggplot(aes(x = month_day, y = avg_count, colour = Location, group = Location)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Mean River Herring Counted by Date in NH Rivers (2013-2023)",
+    x = "Day of Year (Month-Day)",
+    y = "River Herring Counted",
+    color = "River"
+  ) +
+  scale_color_manual(values = c("dodgerblue", "cadetblue", "steelblue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(
+    breaks = unique(average_cumulative$month_day)[seq(1, length(unique(average_cumulative$month_day)), by = 15)])
+
+fish_counts %>%
+  ggplot(aes(x = Location, y = TEMP)) +
+  geom_boxplot(fill = "dodgerblue", linewidth = 0.6) +
+  geom_jitter() +
+  theme_classic() +
+  xlab("River") +
+  ylab("Mean Temperature (\u00b0c)") +
+  ggtitle("Water Temperatures during River Herring Migrations in NH Rivers")
+
+fish_counts %>%
+  group_by(Location, month_day) %>%
+  summarise(mean_temp = mean(TEMP, na.rm = TRUE)) %>%
+  ggplot(aes(x = month_day, y = mean_temp, group = Location, colour = Location)) +
+  geom_point() + 
+  geom_line(aes(group = Location)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(
+    breaks = unique(average_cumulative$month_day)[seq(1, length(unique(average_cumulative$month_day)), by = 15)]) +
+  xlab("Date (mm-dd)") +
+  ylab("Mean Water Temperature (\u00b0c)")
+
+fish_counts %>%
+  ggplot(aes(x = as.factor(Year), y = TEMP)) +
+  geom_violin() +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.5, color = "dodgerblue") +
+  theme_classic() +
+  xlab("Year") +
+  ylab("Temperature (\u00b0c)") +
+  ggtitle("Water Temperature distributions during River Herring Migrations in NH Rivers")
+
+
+
+migration_params %>%  
+  group_by(Location) %>%
+  summarize(Initiation = mean(initiation_day),
+            Peak = mean(peak_day),
+            Termination = mean(termination_day),
+            Duration = mean(duration_days),
+            Run_size = mean(total_count)) %>%
+  kable(digits = 0, col.names = c("Location", "Initation", "Peak", "Termination", "Duration", "Avg. Run Size"))
 ```
+
+## INTRODUCTION
+
+#### What are migrations? Why are migrations important?
+
+Migrations are essential components to the life histories of many taxa. Defined as the predictable long-range movement of individuals, migrations often result from an organism requiring a range of habitats or environmental conditions to maximize fitness, or to exploit resources that vary spatially or temporally (Alerstam *et al.* 2003). Due to their reliance on a suite of habitats across space and time, migratory species are particularly vulnerable to the effects of climate change, habitat fragmentation, and other anthropogenic factors (Runge *et al.* 2004). Studies investigating the drivers of migration timing, duration, and specific migration routes may be useful to effectively manage migratory species.
+
+#### Description of diadromous fish migrations, life cycle, history
+
+One striking example of migration is that of diadromous fish. Diadromous fish spend most of their lives in the marine environment but migrate to freshwater to spawn, often over the course of several months and thousands of kilometers. Diadromous species such as salmonids display a remarkable degree of natal homing, where migrating adult fish will return to the river in which they were born to reproduce (Quinn *et al.* 1999). High numbers of diadromous fish reliably returning to the same location led to the development of economically, culturally, and recreationally important fisheries along Pacific and Atlantic coasts of the United States, particularly for salmonids, American shad (*Alosa sapidissima*), and river herring (Waldman and Quinn 2022). However, this high degree of exploitation combined with increased rates of dam construction, pollution, and climate change caused a precipitous decline in many diadromous fish populations, with some populations today representing just 2% of historical abundances (Hall *et al.* 2011, Limburg and Waldman 2009).
+
+Due to natal homing regulating their migratory route, diadromous fish are unable to spatially shift their range in response to climate change, and instead must shift the timing of their migrations (phenophase) to align with favorable environmental conditions (Hare *et al.* 2016). Alteration or shrinkage of the phenophase can reduce the optimal window for migration and spawning in diadromous fish, which can subsequently affect mortality rates, reproductive output, and population dynamics (Root *et al.* 2003).
+
+#### Primer on RH (biology, ecology, range, general migration timing)
+
+The term “river herring” collectively refers to two diadromous fish species native to the Atlantic coast of the United States, alewife (*Alosa pseudoharengus*) and blueback herring (*Alosa aestivalis*). River herring migrations are anadromous, a form of diadromy in which adults spend most of their lives in marine environments but during the spring migrate back to and spawn in freshwater systems upon reaching maturity at 3-6 years of age (ASMFC 2017). While the exact timing varies by system and latitude, alewives enter freshwater systems and begin migrating upstream when spring water temperatures reach 10 ºC (Ellis and Vokoun 2009), followed by the blueback herring migration at 15 ºC (Greene *et al.* 2009). Unlike most salmonids that spawn once in their lifetime, river herring are capable of spawning in multiple years. The ranges of both species highly overlap, as alewives and blueback herring spawn in rivers from Nova Scotia to North Carolina, but blueback herring occur as far south as Florida (Greene *et al.* 2009).
+
+#### Importance of RH (ecosystem services)
+
+River herring serve several important ecological roles across their range of habitats. Adults and juveniles act as prey for a variety of predators in freshwater and marine food webs, such as fish (Davis *et al.* 2009), birds (Viverette *et al.* 2007), and marine mammals (Browne and Terhune 2003), many of which are also of conservation concern or commercial interest. As adults migrate into rivers and streams, they also deposit marine derived nutrients through mortality, excretion, and reproduction that stimulate primary production and nutrient cycling processes in freshwater systems (Durbin *et al.* 1979). High abundances of river herring may also buffer against the effects of predation on other diadromous fishes that often co-exist in the same systems, such as Atlantic salmon (*Salmo salar*), American shad (*Alosa sapidissima*), and rainbow smelt (*Osmerus mordax*), enhancing population resilience (Saunders *et al.* 2006).
+
+#### RH threats, declines
+
+Targeted river herring commercial fisheries date back hundreds of years but were first documented in 1871 (ASMFC 2024). River herring acted as an abundant source of food and fertilizer, as well as bait in popular lobster fisheries. Fisheries landings averaged 30.5 million pounds from 1880-1938, and peaked at 140 million pounds in 1969 (ASMFC 2024). Fisheries production quickly declined following this peak, amounting to just 1% of peak landings by the mid-1990s, where they remain today coastwide, as river herring fisheries in 2015 landed 1.3 million pounds (ASMFC 2017).
+
+In response to this alarming decline in fisheries production, many state governments and regional fisheries management agencies began implementing more stringent river herring regulations to provide river herring populations an opportunity to recover from their depleted status. Several states implemented fisheries closures in the early 2000’s, including Connecticut, Massachusetts, Rhode Island, Virginia, and North Carolina (ASMFC 2024). Currently, river herring coastwide are managed under ASMFC Amendment 2 to the Shad and River Herring FMP (Fisheries Management Plan), which only permits river herring harvest in states that have either an approved Sustainable Fisheries Management Plan (SFMP) or Alternative Management Plan. As of 2024, states with approved management plans include Maine, New Hampshire, Massachusetts, New York, South Carolina, South Carolina, Georgia, and Florida (ASMFC 2024). All other states are prohibited from commercial and recreational river herring harvest. Despite these regulatory measures, a recent stock assessment of 105 river herring stocks across 84 rivers showed that river herring populations remain depleted relative to historic levels (ASMFC 2024), reflecting the multitude of threats that continue to prevent coastwide river herring recovery.
+
+Although directed fishing pressure has been relaxed in recent decades, river herring continued to be caught as bycatch in large numbers in oceanic fisheries. High volume Atlantic herring (*Clupea harengus*) and Atlantic mackerel (*Scomber scombrus*) trawl and seine fisheries incidentally catch river herring due to the spatial and temporal overlap of these species, particularly in winter months along river herring migration routes (Cournane *et al.* 2013). Bycatch likely affects alewives and blueback herring differently, but species-specific bycatch impacts are difficult to quantify due to the morphological similarities of each species. Mitigating bycatch via gear-based restrictions in Atlantic herring and mackerel fisheries would likely be ineffective, as both species (but particularly Atlantic herring) exhibit similar size ranges, schooling characteristics, and habitat preferences as river herring (Cournane *et al.* 2013). Instead, approaches such as spatial and temporal closures and improved fisheries fleet communication strategies (catch-caps or “move-on” rules) may effectively reduce river herring bycatch (Cournane *et al.* 2013), although implementation of these measures would need to overcome political, economic, and social opposition from Atlantic herring and mackerel stakeholders.
+
+The negative effects of dams and other riverine barriers on river herring and other diadromous fish species are well understood, but the prevalence of these structures remain a significant obstacle to river herring recovery despite growing public and political sentiment toward dam removal in the United States and Canada. Over 2.5 million dams exist in the United States, and many have outlived their utility or original purpose, with some even presenting human health and safety concerns (Jumani *et al.* 2023, Poff and Hart 2002). Dams restrict access to freshwater habitat and spawning grounds for anadromous fish species (Hall *et al.* 2011), and can lead to declines in biomass and population extirpation (Morita *et al.* 2009). Even in systems with barriers that do not completely block upstream access, such as culverts, river herring can experience migratory delays that increase the energetic costs of migration, increase predation risk, and subsequently reduce survival and reproductive output (Alcott *et al.* 2021). Unlike salmonids, which can leap upstream to navigate physical riverine barriers, river herring are unable to jump and are comparatively limited in their upstream swimming abilities, increasing their susceptibility to physical and water velocity barriers (Haro *et al.* 2004). Encouragingly, dam removal studies have shown that river herring are rapidly (within 1 or 2 years) able to recolonize previously inaccessible river reaches following dam removal (Hogg *et al.* 2015, Huang *et al.* 2023), highlighting the need to assess dam utility and develop criteria for prioritizing dam removal.
+
+#### Fishways: Overview and Conservation Utility
+
+In cases where dams still serve important functions, or when dam removal is deemed too unfeasible, expensive, or unsafe, the construction of fishways at riverine barriers can provide diadromous fish with an avenue of upstream passage. However, the construction of a fishway needs to be finely tuned for its intended species and location to be effective. Passage efficiency at fishways is inconsistent, often varying by species, fishway design, and environmental conditions (temperature, water flow, etc.). Fishways also often impose selective pressures on migrating diadromous fish populations, often selecting for fish of certain size, sex, or migratory experience (Maynard *et al.* 2017, Sullivan *et al.* 2023, Volpato *et al.* 2009).  In a system containing both river herring species, alewives arrived earliest at a fishway, followed by blueback herring, which incurred greater migratory delays and reduced passage efficiency than alewives (Hill *et al.* 2024).
+
+Despite some of their drawbacks, fishways are valuable tools that can allow managers to better monitor and identify trends in diadromous fish populations. Fishways are often integrated with automatic counting systems, viewing windows, or video footage to enumerate and identify fish migrating upstream, although species determination is difficult in systems with both river herring species. These data over long-term time series combined with data on temperature, date, flow, and other factors can be used to identify patterns in diadromous fish migration or conditions that best predict migration.
+
+#### RH in New Hampshire
+
+New Hampshire historically supported robust river herring runs of both species in coastal rivers that drained into Great Bay Estuary and Hampton-Seabrook Estuary, including the Cocheco, Exeter, Oyster, Lamprey, Taylor, Winnicut, Squamscott, Salmon Falls, and Bellamy River (Odell *et al.* 2006). Industrial development and a growing textile industry as early as the 18^th^ century led to the construction of dams, mills, and factories along many of these rivers. The subsequent habitat fragmentation caused by dams and pollution caused by industrial runoff resulted in river herring declines statewide.
+
+The New Hampshire Fish and Game Department (NHFGD) began extensive river herring restoration efforts in the 1950’s, which included the construction of fishways on the Cocheco, Exter, Oyster, Lamprey, Taylor, and Winnicut River (NHFGD 2022). Additionally, approximately 56,000 adult river herring were stocked annually in New Hampshire waterways from 1984-2015 to supplement low adult returns (ASMFC 2017). Targeted dam removal efforts began in the early 2000s, resulting in several dams at both head-of-tide and further upstream in their respective rivers removed, thus restoring access to additional spawning habitat for river herring (NHFGD 2022). River herring harvest in New Hampshire is extremely restrictive and is in adherence to Amendment 2 of the ASMFC River Herring FMP, totaling between 3,200 and 43,600 fish annually. Currently, the Cocheco and Lamprey River have the largest river herring runs in New Hampshire, with run sizes exceeding 40,000 fish being observed in recent years (ASMFC 2017). An assessment of trends in New Hampshire river herring returns found that statewide returns generally increased from 2007-2017, although severe declines have also been documented. In the Oyster River, run size was estimated at 157,000 fish in 1992 and had dropped to 1,800 in 2015 (ASMFC 2017). Recent run size data on the Bellamy, Winnicut, and Salmon Falls River are lacking, and future efforts should investigate river herring runs in these systems. Both river herring species occur in New Hampshire waterways, but rarely do they coexist in equal abundances in the same river, with most systems being dominated by either alewife or blueback herring (NHFGD 2022).
+
+#### **Description of project, rationale, research questions, management implications**
+
+Annual monitoring efforts and reporting of run size continue to take place at New Hampshire fishways that pass river herring, but these surveys do not use statistical tools to formally investigate interannual trends in run size or timing within and across rivers. In New Hampshire, alewife migrations occur from late-April to mid-May when water temperatures reach 9ºC, followed by blueback herring migrations from early-May to late June when water temperatures reach 16ºC (ASMFC 2017). Little is known about potential factors that influence river-specific river herring migration timing and run dynamics in New Hampshire. Published scientific studies on river herring run dynamics in New Hampshire are also sparse, limited to one study investigating river herring passage at a fishway on the Lamprey River (Sullivan *et al.* 2023).
+
+This study used a decade long dataset (2013-2023) of fishway counts at the Cocheco, Lamprey, and Oyster River to characterize recent trends in river herring run sizes and investigate the potential effect of temperature and date on the timing of migration initiation, peak, and completion, as well as determine if river-specific differences in river herring migration dynamics exist. Shifts in migration dynamics may indicate river herring temporally responding to climate change and could inform future management decision and monitoring efforts (Lombardo *et al.* 2019). Rivers with opposite trends in run size may indicate if additional restoration efforts are needed to sustain river herring populations in New Hampshire waterways. I predicted that over the course of 2013-2023, river herring migration ingress, peak, and egress dates would shift to earlier in the year, migration duration (phenophase) would shrink, and preferred migration temperatures would occur at earlier dates due to earlier spring warming induced by climate change.
+
+## METHODS
+
+The Cocheco River drains a watershed of 479 km^2^ and is a 48 km long tributary of the Piscataqua River, which empties into the Atlantic Ocean after approximately 20 km (ASMFC 2017). Barriers to river herring migration on the Cocheco River exist at a dam (rkm 5.5), a set of natural falls (rkm 9.5), and Watson Dam at a hydroelectric facility (rkm 11). A Denil fish ladder was constructed at the dam between 1969 and 1970 to facilitate river herring passage which is annually monitored by NHFGD (ASMFC 2017). No fish passage structures exist at the falls, although upstream passage is potentially possible under certain flow conditions. Watson Dam is considered impassable to river herring. The Lamprey River flows 97 km and drains an area of 549 km^2^ into Great Bay Estuary. Barriers to river herring exist at 2 dams: Macallen Dam (rkm 3.2) and Wiswall Dam (rkm 8.8), with Denil fishways constructed to allow passage in 1970 and 2012 respectively (ASMFC 2017). The Wiswall Dam fishway is installed with an electronic fish counter to enumerate migrating river herring. The Oyster River is 27.5 km long and is the smallest watershed in this study (69 km^2^), draining into Great Bay Estuary (ASMFC 2017). Barriers exist at 2 dams, one at head-of-tide (rkm 4.8) and an impassable dam at rkm 7.7. A Denil fish ladder was constructed at the head-of-tide dam in 1975 (ASMFC 2017). The Oyster River river herring population is imperiled when compared to those of the Lamprey and Cocheco River (NHFGD 2023). Oyster River acts as a municipal water supply, and there is concern that large drawdowns could decrease water level and flows below thresholds that allow for river herring passage. Additionally, recent increases in eutrophication could reduce available habitat for river herring.
+
+Fishway counts from 2013-2023 were conducted by NHFGD during annual river herring monitoring surveys. Monitoring occurred daily from mid-April to late-June to account for the entirety of the river herring migration. Fish were enumerated using either electronic fish counters or visual counts. Water temperature data was collected at each fishway during every monitoring trip. All analyses were conducted using the software R, version 4.4.1 (R Core Team, 2024). Daily counts of river herring were rounded to the nearest whole number and each count was also assigned a binomial operator (0 for river herring absence, 1 for presence). The cumulative count of river herring (by year and river) was calculated for each sample to detect seasonal pulses in migration.
+
+Differences in temperature on days where river herring were either present and absent were compared using a T-test. Temperature differences were also assessed using ANOVAs with year, location, and their interaction as fixed effects. The following migratory parameters were calculated for each combination of river and year: Migration initiation date, migration peak date, migration conclusion date, migration duration. Migration initiation, peak, and conclusion date refers to the date at which 5%, 50%, and 95% of total river herring observed for a given year passed the fishway. Migration duration was calculated as the time in days between migration initiation and conclusion date. Initiation, peak, and termination dates were transformed into Julian day (Jan 1 = 1, Feb 1 = 32, etc.) for statistical analysis. ANOVAs used to assess differences in migratory initiation and duration across years and rivers, and included the fixed effects of year, location, and their interaction.
+
+Generalized linear mixed effect models were run to test for differences in river herring run size. Location, year, and their interaction were treated as fixed effects. Year was also treated as a random intercept effect and a random slope effect by location. Hurdle models were run to test for differences in herring presence/absence and daily abundance. Hurdle models first used a binomial distribution to model river herring presence/absence, and then used a GLMM framework with a truncated negative binomial distribution to model daily abundance. Location, temperature, and their interaction was treated as a fixed effect and year was treated as a random intercept effect. All ANOVAs, GLMMs, and hurdle models with multiple candidate models were compared using using AICc.
+
+## RESULTS
+
+#### Summary Statistics
+
+From 2013-2023, a total of 1703 river herring counts were made at fish ladders on the Cocheco, Lamprey, and Oyster River (annual mean = 154.8). Daily counts of river herring ranged from 0 to 29249 (mean 632.5, median 17.5). Over this 10 year period, 1,070,204 river herring were counted at fish ladders, with the greatest annual return across all rivers in 2016 (192,469) and the lowest in 2019 (41,335) (Figure 1).
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Total river herring returns to the Cocheco, Lamprey, and Oyster River from 2013-2023."}
+fish_counts %>%
+  group_by(Year) %>%
+  summarise(River_Herring = sum(DailyTotal, na.rm = TRUE)) %>%
+  ggplot(aes(x = Year, y = River_Herring)) +
+  geom_bar(stat = "identity", fill = "navy") +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(2013, 2023, by = 1)) +
+  xlab("Year") +
+  ylab("Number of River Herring")
+```
+
+Run sizes were highly variable across rivers and were generally greatest in the Lamprey River, fewest in the Oyster River, and intermediate in the Cocheco River (Figure 2). Mean run size across all years and rivers was 32,430. The most river herring counted returning to a river within a year was 99,242 (Cocheco 2016) and the fewest was 863 (Oyster 2016). Seasonally, daily river herring counts rapidly increased from late April to early May, peaked in mid May, and rapidly declined by late May and early June (Figure 3, 4)
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="River herring returns by river. The red rectangle in the Cocheco panel represents a period of fishway modification and counting equipment failure."}
+fish_counts %>%
+  group_by(Year, Location) %>%
+  summarise(River_Herring = sum(DailyTotal, na.rm = TRUE)) %>%
+  ggplot(aes(x = Year, y = River_Herring, fill = Location)) +
+  geom_bar(stat = "identity") +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(2013, 2023, by = 2)) +
+  facet_wrap(~ Location, scales = "free_y") +
+  scale_fill_manual(values = c("dodgerblue", "cadetblue", "steelblue")) +
+  geom_rect(
+    data = data.frame(
+      Location = "Cocheco",
+      xmin = 2017,
+      xmax = 2022,
+      ymin = -Inf,
+      ymax = Inf),
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = "red", alpha = 0.2) +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab("Year") +
+  ylab("Number of River Herring")
+```
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Mean annual cumulative river herring totals by river. The sharp dip and subsequent increase for the Lamprey and Oyster River can be explained by sampling continuing into July during one year of the monitoring period (2023)."}
+ggplot(average_cumulative, aes(x = month_day, y = avg_cumulative_count, color = Location, group = Location)) +
+  geom_line(size = 1) +
+  labs(
+    x = "Day of Year (Month-Day)",
+    y = "Average Cumulative Count",
+    color = "River"
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("dodgerblue", "cadetblue", "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(
+    breaks = unique(average_cumulative$month_day)[seq(1, length(unique(average_cumulative$month_day)), by = 15)])
+```
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Mean number of river herring counted during each calendar day by river."}
+fish_counts %>%
+  group_by(Location, month_day) %>%
+  summarize(avg_count = mean(DailyTotal, na.rm = TRUE)) %>%
+ggplot(aes(x = month_day, y = avg_count, colour = Location, group = Location)) +
+  geom_line(size = 1) +
+  labs(
+    x = "Day of Year (Month-Day)",
+    y = "River Herring Counted",
+    color = "River"
+  ) +
+  scale_color_manual(values = c("dodgerblue", "cadetblue", "steelblue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(
+    breaks = unique(average_cumulative$month_day)[seq(1, length(unique(average_cumulative$month_day)), by = 15)])
+```
+
+#### Temperature Differences
+
+Water temperatures ranged from 0 to 25°C over the course of the monitoring period (early April - mid July, mean = 14.22). There was a significant difference in mean water temperature on days where river herring were absent (mean = 12.702 ± 1.75°C) and days where river herring were present (mean = 14.957 ± 2.76°C) (p = 2.2 x 10\^-16). Mean water temperature across all years predictably increased from early April to late July (Figure 5), but the annual distribution and mean of water temperature varied by year (Figure 6). Year and river had a significant effect on temperature in all ANOVA models, and the best fitting model included both of these covariates (Year p = 0.017, River p = 3.59 x 10\^-5), but not their interaction (Table 1).
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Mean water temperatures by calendar day by river."}
+fish_counts %>%
+  group_by(Location, month_day) %>%
+  summarise(mean_temp = mean(TEMP, na.rm = TRUE)) %>%
+  ggplot(aes(x = month_day, y = mean_temp, group = Location, colour = Location)) +
+  geom_point() + 
+  geom_line(aes(group = Location)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_discrete(
+    breaks = unique(average_cumulative$month_day)[seq(1, length(unique(average_cumulative$month_day)), by = 15)]) +
+  xlab("Date (mm-dd)") +
+  ylab("Mean Water Temperature (\u00b0c)")
+```
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Violin plot showing temperature distributions across each year of the study period. Blue bars indicate mean temperature observed in a given year."}
+fish_counts %>%
+  ggplot(aes(x = as.factor(Year), y = TEMP)) +
+  geom_violin() +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.5, color = "dodgerblue") +
+  theme_classic() +
+  xlab("Year") +
+  ylab("Temperature (\u00b0c)")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+kable(TempTable, digits = 3, align = "c", caption = "Temperature Model Selection")
+```
+
+#### Run Size Differences
+
+Annual river herring run sizes differed significantly between all 3 rivers in each GLMM that included location as a fixed effect. Year alone was not a significant predictor of run size. The model including year, river, and their interaction was the best fitting model according to AICc (Table 2). Predicted run sizes were calculated using this model, and are displayed in Figure 7.
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Predicted river herring run sizes by year and location. Predictions made using best fitting GLMM according to AICc (see table 2)."}
+plot(ggpredict(runlmer2, terms = c("Year", "Location")), show_title = FALSE) +
+  labs(y = "River Herring Run Size")
+```
+
+```{r, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+kable(RunSizeTable, digits = 3, align = "c", caption = "River Herring Run Size Model Selection")
+```
+
+#### Migration Parameters
+
+River herring migrations initiated in late April - early May (mean annual Julian day = 126.57), peaked in mid May (mean annual Julian day = 136.14), terminated in late May (mean annual Julian day = 146.61), and lasted approximately 3 weeks (mean duration in days = 20.04), (migratory parameters summarized in Table 3).
+
+```{r, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+migration_params %>%  
+  group_by(Location) %>%
+  summarize(Initiation = mean(initiation_day),
+            Peak = mean(peak_day),
+            Termination = mean(termination_day),
+            Duration = mean(duration_days),
+            Run_size = mean(total_count)) %>%
+  kable(digits = 0, col.names = c("Location", "Initation", "Peak", "Termination", "Duration", "Avg. Run Size"), caption = "River Herring Migratory Parameters. Initiation, Peak, and Termination columns refer to annual Julian date")
+```
+
+River herring migration initiations were not significantly different by year in any model, but were significantly different by location in all models. River herring migrations from earliest to latest initation were in the Lamprey, Cocheco, and Oyster River respectively (Figure 8). The best fitting migration initiation model included only river as a fixed effect (Table 4).
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Migration initiation Julian day by river."}
+#Initiation Boxplot
+migration_params %>%
+  ggplot(aes(x = Location, y = initiation_day)) +
+  geom_boxplot(fill = "dodgerblue", linewidth = 0.6) +
+  theme_classic() +
+  xlab("River") +
+  ylab("River Herring Migration Initiation (annual Julian day)")
+```
+
+```{r, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+#Initiation Model Selection
+kable(initmodels, digits = 3, align = "c", caption = "River Herring Migration Initiation Model Selection")
+```
+
+River herring migration durations did not differ by location or year in 3 of 4 candidate models. The interaction between river and year was significant (p = .004), although according to AICc this model was functionally equal to the model including year as a fixed effect, which was not significant (Table 5). The interquartile range of migration duration was very similar across rivers (Figure 9).
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Migration duration (difference in Julian day between migration initation and termination) in total days by river."}
+#Duration Boxplot
+migration_params %>%
+  ggplot(aes(x = Location, y = duration_days)) +
+  geom_boxplot(fill = "dodgerblue", linewidth = 0.6) +
+  theme_classic() +
+  xlab("River") +
+  ylab("River Herring Migration Duration (days)") +
+  ggtitle("River Herring Migratory Durations in NH Rivers")
+```
+
+```{r, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+#Duration Model Selection
+kable(duratmods, digits = 3, align = "c", caption = "River Herring Migration Duration Model Selection")
+```
+
+#### Estimating Presence/Absence and Abundance
+
+River herring presence/absence and abundance was estimated using a hurdle model framework, which first uses a binomial model to predict presence/absence, and then uses a truncated negative binomial model to estimate daily abundance for days on which river herring was observed. Candidate models and respective AICc values are displayed in Table 6. The best fitting model included year as a random intercept effect, location, temperature, and the interaction between temperature and location. The predicted probability of river herring presence and daily counts of river herring using this model is shown in Figure 10 and 11 respectively.
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Predicted probability of river herring presence by temperature and river. Predictions made using best fitting hurdle model according to AICc (see table 6)."}
+#Binom Predictive Model (Presence)
+binom <- glmer(Binom ~ (1 | Year) + Location * TEMP, data = fish_counts, family = binomial)
+plot_model(binom, type = "pred", terms = c("TEMP", "Location"), title = "Predicted Probability of River Herring Presence vs \n Temperature and Location (Random Year Effect)", axis.title = c("Temperature (\u00b0c)","Probability of River Herring Presence"))
+```
+
+```{r, echo=FALSE, results='hide', fig.show=TRUE, warning=FALSE, message=FALSE, fig.cap="Predicted total counts of river herring by temperature and river (assuming river herring are present). Predictions made using best fitting hurdle model according to AICc (see table 6)."}
+#Neg. Binom Predictive Model (Abundance)
+plot(ggpredict(hurdmod1, terms = c("TEMP", "Location")))
+```
+
+```{r, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+#Hurdle Model Selection
+kable(HurdleModels, digits = 3, align = "c", caption = "River Herring Presence/Absence and Abundance Hurdle Model Selection")
+```
+
+## DISCUSSION
+
+Annual trends in river herring run sizes are mixed across each river monitored in this study. River herring populations appear to be increasing in the Oyster River, stable in the Lamprey River, and decreasing in the Cocheco River, although this decrease may in large part due to sampling error (discussed further below). Given the high interannual variability in river herring recruitment and population dynamics (Hare et al. 2021), a multi-decadal study is necessary to conclude if population growth or decline is occurring in monitored New Hampshire rivers. Peak river herring counts and peak migration date were primarily observed in late April and early May, similar to another study in 20 Massachusetts lakes (Rosset et al. 2017). Migration initiation varied between rivers, but duration was similar. A potential explanation is early spring water temperatures increase at different rates Cocheco, Lamprey, and Oyster River, but late spring temperatures are not high enough to significantly shrink the optimal river herring migration window. Hurdle models showed that temperature had a significant effect on both river herring presence and abundance, similar to several studies investigating river herring migration dynamics (Legett et al. 2021, Lombardo et al. 2020, Rosset et al. 2017, and others). There is still debate regarding whether temperature or flow is the master predictor variable of river herring migrations (Legett et al. 2021), but a lack of flow data in this data set prevents us from attempting to tease apart the relative influence of temperature and flow.
+
+Several biases are evident in the fishway monitoring dataset and subsequent analyses. For an approximately 6 year period on the Cocheco River fishway (2017-2022), counting equipment failure and fishway modifications contributed to greatly reduced river herring counts (see Figure 1) (ASMFC 2024). Many river herring were observed below the fishway, but were unable to ascend partially due to poor attraction flows. Therefore, daily counts and total run sizes at the Cocheco River are likely underestimates of migrating river herring. Future monitoring efforts at this location are necessary to determine if the period of fishway modification was the primary driver of diminished counts from 2017-2022. The electronic counting equipment installed at each fishway is also prone to bias, but is the most practical method to enumerate migrating river herring that can move in schools of hundreds of individuals. Focused efforts to estimate the counting error of this technology will help to more accurately model and predict river herring abundance in New Hampshire.
+
+This study mainly investigated the effects of temperature and location on river herring migration timing, but future studies should consider other factors and variables shown to influence migration timing. Notably, this study did not differentiate between river herring species (alewife and blueback herring). River herring species exhibit partial temporal overlap in migration timing, but are likely affected by temperature differently in New Hampshire, as alewives begin migrating earlier than blueback herring elsewhere (Saunders et al. 2006). Additional sampling efforts should be conducted to determine the proportion of river herring species in each river, which would allow for species to be included as a covariate in future models for systems where both species are found. Other variables to consider include tidal cycle, flow rates, diel period, and temperature anomalies (temperatures either well above or below long term averages), all of which have been shown to influence river herring migration timing (Legett et al. 2021, Legett et al. 2023, Rillahan and He 2023). Understanding the drivers of river herring migration phenology in New Hampshire will help inform future management efforts, prevent fisheries closures, and allow managers to better predict how river herring populations will respond to climate change.
+
+## WORKS CITED
+
+Alcott, D., Goerig, E., & Castro-Santos, T. (2021). Culverts delay upstream and downstream migrations of river herring (Alosa spp.). *River Research and Applications*, *37*(10), 1400–1412. <https://doi.org/10.1002/rra.3859>
+
+Alerstam, T., Hedenström, A., & Åkesson, S. (2003). Long-distance migration: Evolution and determinants. *Oikos*, *103*(2), 247–260. <https://doi.org/10.1034/j.1600-0706.2003.12559.x>
+
+ASMFC. Atlantic States Marine Fisheries Commission. (2024). River Herring Benchmark Stock Assessment and Peer Review Report. 499 pp.
+
+ASMFC. Atlantic States Marine Fisheries Commission. (2017). River Herring Stock Assessment Update Volume I: Coastwide Summary. 193 pp.
+
+ASMFC. Atlantic States Marine Fisheries Commission. (2017). River Herring Stock Assessment Update Volume II: State-Specific Reports. 682 pp.
+
+Bailey, D. M., Fish, U. S., Brown, M., Curti, D. K., Gahagan, B., Harp, A., Kipp, J., & Sullivan, K. (n.d.). *River Herring Stock Assessment Update Volume I: Coastwide Summary*.
+
+Brown, J. J., Limburg, K. E., Waldman, J. R., Stephenson, K., Glenn, E. P., Juanes, F., & Jordaan, A. (2013). Fish and hydropower on the U.S. Atlantic coast: Failed fisheries policies from half-way technologies. *Conservation Letters*, *6*(4), 280–286. <https://doi.org/10.1111/conl.12000>
+
+Browne, C. L., & Terhune, J. M. (2003). Harbor Seal (Phoca vitulina, Linnaeus) Abundance and Fish Migration in the Saint John Harbour. *Northeastern Naturalist*, *10*(2), 131–140. <https://doi.org/10.2307/3858282>
+
+Cournane, J. M., Kritzer, J. P., & Correia, S. J. (2013). Spatial and temporal patterns of anadromous alosine bycatch in the US Atlantic herring fishery. *Fisheries Research*, *141*, 88–94. <https://doi.org/10.1016/j.fishres.2012.08.001>
+
+Davis, J. P., & Schultz, E. T. (2009). Temporal Shifts in Demography and Life History of an Anadromous Alewife Population in Connecticut. *Marine and Coastal Fisheries*, *1*(1), 90–106. <https://doi.org/10.1577/C08-003.1>
+
+Durbin, A. G., Nixon, S. W., & Oviatt, C. A. (1979). Effects of the Spawning Migration of the Alewife, Alosa Pseudoharengus, on Freshwater Ecosystems. *Ecology*, *60*(1), 8–17. <https://doi.org/10.2307/1936461>
+
+Ellis, D., & Vokoun, J. C. (2009). Earlier Spring Warming of Coastal Streams and Implications for Alewife Migration Timing. *North American Journal of Fisheries Management*, *29*(6), 1584–1589. <https://doi.org/10.1577/M08-181.1>
+
+Greene, K. E., Zimmerman, J. L., Laney, R. W., & Thomas-Blate, J. C. (n.d.). *Atlantic Coast Diadromous Fish Habitat: A Review of Utilization, Threats, Recommendations for Conservation, and Research Needs*.
+
+Hall, C. J., Jordaan, A., & Frisk, M. G. (2011). The historic influence of dams on diadromous fish habitat with a focus on river herring and hydrologic longitudinal connectivity. *Landscape Ecology*, *26*(1), 95–107. <https://doi.org/10.1007/s10980-010-9539-1>
+
+Hare, J. A., Morrison, W. E., Nelson, M. W., Stachura, M. M., Teeters, E. J., Griffis, R. B., Alexander, M. A., Scott, J. D., Alade, L., Bell, R. J., Chute, A. S., Curti, K. L., Curtis, T. H., Kircheis, D., Kocik, J. F., Lucey, S. M., McCandless, C. T., Milke, L. M., Richardson, D. E., … Griswold, C. A. (2016). A Vulnerability Assessment of Fish and Invertebrates to Climate Change on the Northeast U.S. Continental Shelf. *PLOS ONE*, *11*(2), e0146756. <https://doi.org/10.1371/journal.pone.0146756>
+
+Haro, A., Castro-Santos, T., Noreika, J., & Odeh, M. (2004). Swimming performance of upstream migrant fishes in open-channel flow: A new approach to predicting passage through velocity barriers. *Canadian Journal of Fisheries and Aquatic Sciences*, *61*(9), 1590–1601. <https://doi.org/10.1139/f04-093>
+
+Hill, C. R., O’Sullivan, A. M., Hogan, J. D., Curry, R. A., Linnansaari, T., & Harrison, P. M. (2024). Limitations of Non-Volitional Upstream Passage for Alewife () and Blueback Herring (). *River Research and Applications*, *n/a*(n/a). <https://doi.org/10.1002/rra.4372>
+
+Hogg, R. S., Coghlan Jr., S. M., Zydlewski, J., & Gardner, C. (2015). Fish Community Response to a Small-Stream Dam Removal in a Maine Coastal River Tributary. *Transactions of the American Fisheries Society*, *144*(3), 467–479. <https://doi.org/10.1080/00028487.2015.1007164>
+
+Huang, C. S., Legett, H. D., Plough, L. V., Aguilar, R., Fitzgerald, C., Gregory, B., Heggie, K., Lee, B., Richie, K. D., Harbold, W., & Ogburn, M. B. (2023). Early detection and recovery of river herring spawning habitat use in response to a mainstem dam removal. *PLOS ONE*, *18*(5), e0284561. <https://doi.org/10.1371/journal.pone.0284561>
+
+Jumani, S., Andrews, L., Grantham, T. E., McKay, S. K., Duda, J., & Howard, J. (2023). A decision‐support framework for dam removal planning and its application in northern California. *Environmental Challenges*, *12*, 100731. <https://doi.org/10.1016/j.envc.2023.100731>
+
+Limburg, K. E., & Waldman, J. R. (2009). Dramatic Declines in North Atlantic Diadromous Fishes. *BioScience*, *59*(11), 955–965. <https://doi.org/10.1525/bio.2009.59.11.7>
+
+Lombardo, S. M., Buckel, J. A., Hain, E. F., Griffith, E. H., & White, H. (2020). Evidence for temperature-dependent shifts in spawning times of anadromous alewife (Alosa pseudoharengus) and blueback herring (Alosa aestivalis). *Canadian Journal of Fisheries and Aquatic Sciences*, *77*(4), 741–751. <https://doi.org/10.1139/cjfas-2019-0140>
+
+Mattocks, S., Hall, C. J., & Jordaan, A. (2017). Damming, Lost Connectivity, and the Historical Role of Anadromous Fish in Freshwater Ecosystem Dynamics. *BioScience*, *67*(8), 713–728. <https://doi.org/10.1093/biosci/bix069>
+
+Maynard, G. A., Kinnison, M. T., & Zydlewski, J. D. (2017). Size selection from fishways and potential evolutionary responses in a threatened Atlantic salmon population. *River Research and Applications*, *33*(7), 1004–1015. <https://doi.org/10.1002/rra.3155>
+
+Morita, K., Morita, S. H., & Yamamoto, S. (2009). Effects of habitat fragmentation by damming on salmonid fishes: Lessons from white-spotted charr in Japan. *Ecological Research*, *24*(4), 711–722. <https://doi.org/10.1007/s11284-008-0579-9>
+
+Nathan, R., Getz, W. M., Revilla, E., Holyoak, M., Kadmon, R., Saltz, D., & Smouse, P. E. (2008). A movement ecology paradigm for unifying organismal movement research. *Proceedings of the National Academy of Sciences*, *105*(49), 19052–19059. <https://doi.org/10.1073/pnas.0800375105>
+
+NHFG. New Hampshire Fish and Game. 2024. Final Report: New Hampshire’s Marine Fisheries Investigations. Concord, NH. Grant F-61-R-25/F22AF00514. 17 pp.
+
+Odell, J., Eberhardt, A. L., Burdick, D. M,. and Ingraham, P., 2006. Great Bay Estuary Restoration Compendium. PREP Reports & Publications. 150. <https://scholars.unh.edu/prep/150>
+
+Poff, N. L., & Hart, D. D. (2002). How Dams Vary and Why It Matters for the Emerging Science of Dam Removal. *BioScience*, *52*(8), 659. [https://doi.org/10.1641/0006-3568(2002)052\[0659:HDVAWI\]2.0.CO;2](https://doi.org/10.1641/0006-3568(2002)052%5b0659:HDVAWI%5d2.0.CO;2)
+
+Quinn, T. P., Volk, E. C., & Hendry, A. P. (1999). Natural otolith microstructure patterns reveal precise homing to natal incubation sites by sockeye salmon ( *Oncorhynchus nerka* ). *Canadian Journal of Zoology*, *77*(5), 766–775. <https://doi.org/10.1139/z99-028>
+
+Root, T. L., Price, J. T., Hall, K. R., Schneider, S. H., Rosenzweig, C., & Pounds, J. A. (2003). Fingerprints of global warming on wild animals and plants. *Nature*, *421*(6918), 57–60. <https://doi.org/10.1038/nature01333>
+
+Runge, C. A., Martin, T. G., Possingham, H. P., Willis, S. G., & Fuller, R. A. (n.d.). *Conserving mobile species*. <https://doi.org/10.1890/130237>
+
+Saunders, R., Hachey, M. A., & Fay, C. W. (2006). Maine’s Diadromous Fish Community. *Fisheries*, *31*(11), 537–547. [https://doi.org/10.1577/1548-8446(2006)31\[537:MDFC\]2.0.CO;2](https://doi.org/10.1577/1548-8446(2006)31%5b537:MDFC%5d2.0.CO;2)
+
+Sullivan, K. M., Bailey, M. M., & Berlinsky, D. L. (2023). Passage Efficiency of Alewife in a Denil Fishway Using Passive Integrated Transponder Tags. *North American Journal of Fisheries Management*, *43*(3), 772–785. <https://doi.org/10.1002/nafm.10893>
+
+Viverette, C. B., Garman, G. C., McIninch, S. P., Markham, A. C., Watts, B. D., & Macko, S. A. (2007). Finfish-Waterbird Trophic Interactions in Tidal Freshwater Tributaries of the Chesapeake Bay. *Waterbirds*, *30*(sp1), 50–62. [https://doi.org/10.1675/1524-4695(2007)030\[0050:FTIITF\]2.0.CO;2](https://doi.org/10.1675/1524-4695(2007)030%5b0050:FTIITF%5d2.0.CO;2)
+
+Volpato, G., Barreto, R., Marcondes, A., Moreira, P., & Ferreira, M. (2009). Fish ladders select fish traits on migration–still a growing problem for natural fish populations. *Marine and Freshwater Behaviour and Physiology*, *42*, 307–313. <https://doi.org/10.1080/10236240903299177>
+
+Waldman, J. R., & Quinn, T. P. (2022). North American diadromous fishes: Drivers of decline and potential for recovery in the Anthropocene. *Science Advances*, *8*(4), eabl5486. <https://doi.org/10.1126/sciadv.abl5486>
+
+Wigley, S. E., Blaylock, J. (Jessica), & Rago, P. J. (n.d.). *River herring discard estimation, precision, and sample size analysis*. Retrieved October 30, 2024, from <https://repository.library.noaa.gov/view/noaa/3690>
