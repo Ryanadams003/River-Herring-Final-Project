@@ -446,8 +446,6 @@ fish_counts %>%
   ylab("Temperature (\u00b0c)") +
   ggtitle("Water Temperature distributions during River Herring Migrations in NH Rivers")
 
-
-
 migration_params %>%  
   group_by(Location) %>%
   summarize(Initiation = mean(initiation_day),
@@ -456,7 +454,38 @@ migration_params %>%
             Duration = mean(duration_days),
             Run_size = mean(total_count)) %>%
   kable(digits = 0, col.names = c("Location", "Initation", "Peak", "Termination", "Duration", "Avg. Run Size"))
+
+#write.csv(migration_params, row.names = TRUE, "migration_params.csv")
+
+# Remove duplicates by keeping the first occurrence of each Date per Location and Year
+fish_counts_unique <- fish_counts %>%
+  distinct(Location, Year, Date, .keep_all = TRUE)
+
+# Extract temperatures for migration initiation, peak, and termination
+temp_initiation <- fish_counts_unique %>%
+  select(Date, Location, Year, TEMP) %>%
+  rename(initiation_date = Date, initiation_temp = TEMP)
+
+temp_peak <- fish_counts_unique %>%
+  select(Date, Location, Year, TEMP) %>%
+  rename(peak_date = Date, peak_temp = TEMP)
+
+temp_termination <- fish_counts_unique %>%
+  select(Date, Location, Year, TEMP) %>%
+  rename(termination_date = Date, termination_temp = TEMP)
+
+# Combine temperatures with migration_parameters
+migration_with_temp <- migration_params %>%
+  left_join(temp_initiation, by = c("Year", "Location", "initiation_date")) %>%
+  left_join(temp_peak, by = c("Year", "Location", "peak_date")) %>%
+  left_join(temp_termination, by = c("Year", "Location", "termination_date"))
+
+write.csv(migration_with_temp, row.names = TRUE, "migration_w_temp.csv")
 ```
+
+## ABSTRACT
+
+The population dynamics of diadromous fish, and the timing of their migrations, is driven by suite of environmental factors. Robust long-term monitoring datasets of diadromous fish accompanied by environmental data can be used to test the effects environmental variables, such as water temperature, across spatial and temporal scales. This study analyzed a 10 year dataset (2013-2023) of three fishways in coastal New Hampshire to investigate the migration and population dynamics of river herring (Alosa pseudoharengus and Alosa aestivalis). Population trajectories and the effect of temperature on migration timing were system specific, but water temperature was found to be a predictor of both river herring presence and daily abundance during river herring migrations. These findings further contribute to a growing body of literature that suggests river herring are vulnerable to climate change.
 
 ## INTRODUCTION
 
@@ -504,7 +533,7 @@ The New Hampshire Fish and Game Department (NHFGD) began extensive river herring
 
 Annual monitoring efforts and reporting of run size continue to take place at New Hampshire fishways that pass river herring, but these surveys do not use statistical tools to formally investigate interannual trends in run size or timing within and across rivers. In New Hampshire, alewife migrations occur from late-April to mid-May when water temperatures reach 9ºC, followed by blueback herring migrations from early-May to late June when water temperatures reach 16ºC (ASMFC 2017). Little is known about potential factors that influence river-specific river herring migration timing and run dynamics in New Hampshire. Published scientific studies on river herring run dynamics in New Hampshire are also sparse, limited to one study investigating river herring passage at a fishway on the Lamprey River (Sullivan *et al.* 2023).
 
-This study used a decade long dataset (2013-2023) of fishway counts at the Cocheco, Lamprey, and Oyster River to characterize recent trends in river herring run sizes and investigate the potential effect of temperature and date on the timing of migration initiation, peak, and completion, as well as determine if river-specific differences in river herring migration dynamics exist. Shifts in migration dynamics may indicate river herring temporally responding to climate change and could inform future management decision and monitoring efforts (Lombardo *et al.* 2020). Rivers with opposite trends in run size may indicate if additional restoration efforts are needed to sustain river herring populations in New Hampshire waterways. I predicted that over the course of 2013-2023, river herring migration ingress, peak, and egress dates would shift to earlier in the year, migration duration (phenophase) would shrink, and preferred migration temperatures would occur at earlier dates due to earlier spring warming induced by climate change.
+This study used a decade long dataset (2013-2023) of fishway counts at the Cocheco, Lamprey, and Oyster River to characterize recent trends in river herring run sizes and investigate the potential effect of temperature and date on the timing of migration initiation, peak, and completion, as well as determine if river-specific differences in river herring migration dynamics exist. Shifts in migration dynamics may indicate river herring temporally responding to climate change and could inform future management decision and monitoring efforts (Lombardo *et al.* 2020). Rivers with opposite trends in run size may indicate if additional restoration efforts are needed to sustain river herring populations in New Hampshire waterways. I predicted that average water temperature would increase over the course of the study period, migration initiation and duration would be system specific, and that temperature would be a predictor of river herring presence and abundance.
 
 ## METHODS
 
