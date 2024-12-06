@@ -748,6 +748,8 @@ Several biases are evident in the fishway monitoring dataset and subsequent anal
 
 This study mainly investigated the effects of temperature and location on river herring migration timing, but future studies should consider other factors and variables shown to influence migration timing. Notably, this study did not differentiate between river herring species (alewife and blueback herring). River herring species exhibit partial temporal overlap in migration timing, but are likely affected by temperature differently in New Hampshire, as alewives begin migrating earlier than blueback herring elsewhere (Saunders *et al.* 2006). Additional sampling efforts should be conducted to determine the proportion of river herring species in each river, which would allow for species to be included as a covariate in future models for systems where both species are found. Other variables to consider include tidal cycle, flow rates, diel period, and temperature anomalies (temperatures either well above or below long term averages), all of which have been shown to influence river herring migration timing (Legett *et al.* 2021, Legett *et al.* 2023, Rillahan and He 2023). Understanding the drivers of river herring migration phenology in New Hampshire will help inform future management efforts, prevent fisheries closures, and allow managers to better predict how river herring populations will respond to climate change.
 
+#### GitHub Repository: <https://github.com/Ryanadams003/River-Herring-Final-Project>
+
 ## WORKS CITED
 
 Alcott, D., Goerig, E., & Castro-Santos, T. (2021). Culverts delay upstream and downstream migrations of river herring (Alosa spp.). *River Research and Applications*, *37*(10), 1400–1412. <https://doi.org/10.1002/rra.3859>
